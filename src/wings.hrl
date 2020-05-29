@@ -39,48 +39,6 @@
 
 -type selection() :: orddict:orddict(integer(),gb_sets:set()).
 
-%% State and records
-%% Main state record containing all objects and other important state.
--record(st,
-	{shapes=gb_trees:empty() :: gb_trees:tree(),%All visible objects
-	 selmode=face :: wings_sel:mode(),          %Selection mode.
-	 sh=false :: boolean(),			    %Smart highlighting active.
-	 sel=[] :: selection(),                     %Current sel: [{Id,GbSet}]
-	 ssels=gb_trees:empty() :: gb_trees:tree(), %Saved selections:
-
-	 %% Selection only temporary?
-	 temp_sel=none :: 'none' | {wings_sel:mode(),boolean()},
-
-	 mat=gb_trees:empty() :: gb_trees:tree(),%Defined materials (GbTree).
-	 pal=[],                                %Palette
-	 file,					%Current filename.
-	 saved=false :: 'false'  | 'true' | 'auto' | integer(),
-	 onext=1 :: pos_integer(),		%Next object id to use.
-
-	 %% Saved bounding box. (AutoUV uses it for its own purposes,
-	 %% therefore the type must also a allow a tuple.)
-	 bb=none :: 'none' | bounding_box() | tuple(),
-
-	 edge_loop=none,			%Previous edge loop.
-	 views={0,{}},				%{Current,TupleOfViews}
-	 pst=gb_trees:empty() :: gb_trees:tree(), %Plugin State Info
-						%   gb_tree where key is plugin	module
-
-	 %% Previous commands.
-	 repeatable=ignore :: maybe_wings_cmd(), %Last repeatable command.
-	 ask_args,				%Ask arguments.
-	 drag_args,			        %Drag arguments for command.
-
-	 %% Default commands (LMB, RMB).
-	 def={ignore,ignore} :: {maybe_wings_cmd(),maybe_wings_cmd()},
-
-
-	 %% Undo information.
-	 last_cmd=empty_scene,		        %Last command.
-	 undo=queue:new() :: queue:queue(),	%Undo (de)queue.
-	 next_is_undo=true :: boolean(),	%State of undo/redo toggle.
-	 undone=[] :: list()		        %States that were undone.
-	}).
 
 %% The Winged-Edge data structure.
 %% See http://www.cs.mtu.edu/~shene/COURSES/cs3621/NOTES/model/winged-e.html

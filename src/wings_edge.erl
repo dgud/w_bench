@@ -16,15 +16,11 @@
 %% Utilities.
 -export([from_vs/2,to_vertices/2,from_faces/2,
          reachable_faces/3,
-	 select_region/1,select_region/2,
-	 select_edge_ring/1,select_edge_ring_incr/1,select_edge_ring_decr/1,
 	 cut/3,fast_cut/3,screaming_cut/3,
 	 dissolve_edge/2,dissolve_edges/2,dissolve_edges/3,
          dissolve_isolated_vs/2,
 	 hardness/3,
 	 patch_edge/4,patch_edge/5,
-	 select_nth_ring/2,
-	 select_nth_loop/2,
 	 length/2
 	]).
 
@@ -193,33 +189,6 @@ dissolve_isolated_vs([], We) -> We.
 hardness(Edge, soft, Htab) -> gb_sets:delete_any(Edge, Htab);
 hardness(Edge, hard, Htab) -> gb_sets:add(Edge, Htab).
 
-%%%
-%%% "Select faces on one side of an edge loop."
-%%%
-%%% This description is pretty ambigous. If there are
-%%% multiple edge loops, it is not clear what to select.
-%%%
-%%% What we do for each object is to collect all faces
-%%% sandwhiched between one or more edge loops. We then
-%%% partition all those face collection into one partition
-%%% for each sub-object (if there are any). For each
-%%% sub-object, we arbitrarily pick the face collection
-%%% having the smallest number of faces.
-%%%
-
-select_region(#st{selmode=edge}=St) ->
-    wings_sel:update_sel(fun select_region/2, face, St);
-select_region(St) -> St.
-
-%% -spec select_region(Edges, We) -> setOf(Faces).
-select_region(Edges, We) when is_list(Edges) ->
-    select_region(gb_sets:from_list(Edges), We);
-select_region(Edges0, We) ->
-    Part = wings_edge_loop:partition_edges(Edges0, We),
-    Edges = select_region_borders(Edges0, We),
-    FaceSel = select_region_1(Part, Edges, We, []),
-    gb_sets:from_ordset(wings_we:visible(FaceSel, We)).
-
 %%
 %% Collect all faces reachable from Face, without crossing
 %% any of the edges in Edges.
@@ -235,22 +204,6 @@ reachable_faces(Faces, Edges, We) when is_list(Faces) ->
     collect_faces(gb_sets:from_list(Faces), We, Edges, gb_sets:empty());
 reachable_faces(Fs, Edges, We) ->
     collect_faces(Fs, We, Edges, gb_sets:empty()).
-
-%%%
-%%% Edge Ring. (Based on Anders Conradi's plug-in.)
-%%%
-
-select_edge_ring(#st{selmode=edge}=St) ->
-    wings_sel:update_sel(fun build_selection/2, St);
-select_edge_ring(St) -> St.
-
-select_edge_ring_incr(#st{selmode=edge}=St) ->
-    wings_sel:update_sel(fun incr_ring_selection/2, St);
-select_edge_ring_incr(St) -> St.
-
-select_edge_ring_decr(#st{selmode=edge}=St) ->
-    wings_sel:update_sel(fun decr_ring_selection/2, St);
-select_edge_ring_decr(St) -> St.
 
 
 %%%
@@ -576,87 +529,6 @@ stabile_neighbor(#edge{ltpr=Ea,ltsu=Eb,rtpr=Ec,rtsu=Ed}, Del) ->
     Edge.
 
 
-select_region_1([[AnEdge|_]|Ps], Edges, #we{es=Etab}=We, Acc) ->
-    #edge{lf=Lf,rf=Rf} = array:get(AnEdge, Etab),
-    Left = reachable_faces([Lf], Edges, We),
-    Right = reachable_faces([Rf], Edges, We),
-
-    %% We'll let AnEdge identify the edge loop that each
-    %% face collection borders to.
-    select_region_1(Ps, Edges, We, [{Left,AnEdge},{Right,AnEdge}|Acc]);
-select_region_1([], _Edges, _We, Acc) ->
-    %% Now we have all collections of faces sandwhiched between
-    %% one or more edge loops. Using the face collections as keys,
-    %% we will partition the edge loop identifiers into groups.
-
-    Rel0 = [{gb_sets:to_list(Set),Edge} || {Set,Edge} <- Acc],
-    Rel = sofs:relation(Rel0),
-    Fam = sofs:relation_to_family(Rel),
-    DirectCs = sofs:to_external(sofs:range(Fam)),
-
-    %% DirectCs now contains lists of edge loop identifiers that
-    %% can reach each other through a collection of face.
-    %% Using a digraph, partition edge loop into components
-    %% (each edge loop in a component can reach any other edge loop
-    %% directly or indirectly).
-
-    G = digraph:new(),
-    make_digraph(G, DirectCs),
-    Cs = digraph_utils:components(G),
-    digraph:delete(G),
-
-    %% Now having the components, consisting of edge identifiers
-    %% identifying the original edge loop, we now need to partition
-    %% the actual collection of faces.
-
-    PartKey0 = [[{K,sofs:from_term(F)} || K <- Ks] || [F|_]=Ks <- Cs],
-    PartKey = gb_trees:from_orddict(sort(lists:append(PartKey0))),
-    SetFun = fun(S) ->
-		     {_,[E|_]} = sofs:to_external(S),
-		     gb_trees:get(E, PartKey)
-	     end,
-    Part = sofs:to_external(sofs:partition(SetFun, Fam)),
-
-    %% We finally have one partition for each sub-object.
-
-    Sel = [select_region_2(P) || P <- Part],
-    lists:merge(Sel).
-
-select_region_2(P) ->
-    case [Fs || {Fs,[_]} <- P] of
-	[_|_]=Fss when length(Fss) < length(P) ->
-	    lists:merge(Fss);
-	_ ->
-	    [{_,Fs}|_] = sort([{length(Fs),Fs} || {Fs,_} <- P]),
-	    Fs
-    end.
-
-select_region_borders(Edges0, #we{mirror=Mirror,holes=Holes}=We) ->
-    Bs = case Mirror of
-	     none -> Holes;
-	     _ -> [Mirror|Holes]
-	 end,
-    case Bs of
-	[] ->
-	    Edges0;
-	[_|_] ->
-	    BorderEdges = wings_face:to_edges(Bs, We),
-	    gb_sets:union(gb_sets:from_list(BorderEdges), Edges0)
-    end.
-
-make_digraph(G, [Es|T]) ->
-    make_digraph_1(G, Es),
-    make_digraph(G, T);
-make_digraph(_, []) -> ok.
-
-make_digraph_1(G, [E]) ->
-    digraph:add_vertex(G, E);
-make_digraph_1(G, [E1|[E2|_]=Es]) ->
-    digraph:add_vertex(G, E1),
-    digraph:add_vertex(G, E2),
-    digraph:add_edge(G, E1, E2),
-    make_digraph_1(G, Es).
-
 collect_faces(Work0, We, Edges, Acc0) ->
     case gb_sets:is_empty(Work0) of
 	true -> Acc0;
@@ -687,109 +559,6 @@ collect_maybe_add(Work, Face, Edges, We, Res) ->
 	   ls=gb_sets:empty(),
 	   rs=gb_sets:empty()}).
 
-build_selection(Edges, We) ->
-    Init = init_edge_ring([],unknown,Edges,We,0,[]),
-    Stops0 = foldl(fun(#r{id=MyId,ls=O},S0) ->
-			   gb_sets:fold(fun(E,S) -> [{E,MyId} | S] end,
-					S0, O)
-		   end,[],Init),
-    Stop = gb_trees:from_orddict(lists:sort(Stops0)),
-    Sel0 = grow_rings(Init,[],Stop,We,gb_sets:empty()),
-    Sel = wings_we:visible_edges(Sel0, We),
-    gb_sets:union(Sel, Edges).
-
-grow_rings([First = #r{id=This}|R0],Rest0,Stop,We,Acc) ->
-    case grow_ring1(First,Stop,We) of
-	{stop, This, Edges} ->
-	    grow_rings(R0,Rest0,Stop,We,gb_sets:union(Edges,Acc));
-	{stop, Id, Edges} ->
-	    R = lists:keydelete(Id,2,R0),
-	    Rest = lists:keydelete(Id,2,Rest0),
-	    grow_rings(R,Rest,Stop,We,gb_sets:union(Edges,Acc));
-	{cont,New} ->
-	    grow_rings(R0,[New|Rest0],Stop,We,Acc)
-    end;
-grow_rings([],[],_,_,Acc) -> Acc;
-grow_rings([],Rest,Stop,We,Acc) ->
-    grow_rings(Rest, [], Stop, We, Acc).
-
-grow_ring1(#r{id=Id,l=unknown,r=unknown,ls=LS,rs=RS},_Stop,_We) ->
-    {stop, Id, gb_sets:union(LS,RS)};
-grow_ring1(This = #r{id=ID,l=L0,ls=LS0,r=R0,rs=RS0},Stop,We) ->
-    case grow_ring2(ID,L0,LS0,Stop,We) of
-	{L,LS} ->
-	    case grow_ring2(ID,R0,RS0,Stop,We) of
-		{R,RS} -> {cont,This#r{l=L,ls=LS,r=R,rs=RS}};
-		Break ->  Break
-	    end;
-	Break -> Break
-    end.
-
-grow_ring2(ID,Edge,Edges,Stop,We) ->
-    case grow_ring3(Edge,Edges,Stop,We) of
-	{stop, ID, Edges} ->  {unknown,Edges};
-	Else ->   Else
-    end.
-
-grow_ring3(unknown,Edges,_Stop,_We) ->
-    {unknown,Edges};
-grow_ring3(Edge,Edges,Stop,We) ->
-    case gb_trees:lookup(Edge,Stop) of
-	{value,Id} -> 
-	    {stop,Id,Edges};
-	none -> 
-	    Left = opposing_edge(Edge, We, left),
-	    case gb_sets:is_member(Left,Edges) of
-		false ->
-		    {Left,gb_sets:add(Edge,Edges)};
-		true ->
-		    Right = opposing_edge(Edge, We, right),
-		    case gb_sets:is_member(Right,Edges) of
-			true ->  {unknown, Edges};
-			false -> {Right,gb_sets:add(Edge,Edges)}
-		    end
-	    end
-    end.
-
-init_edge_ring([],unknown,Edges0,We,Id,Acc) -> 
-    case gb_sets:is_empty(Edges0) of
-	true -> Acc;
-	false ->
-	    {Edge,Edges} = gb_sets:take_smallest(Edges0),
-	    Left = opposing_edge(Edge, We, left),
-	    Right = opposing_edge(Edge, We, right),
-	    init_edge_ring([Left,Right],#r{id=Id,l=Edge,r=Edge},Edges,We,Id+1,Acc)
-    end;
-init_edge_ring([],EI = #r{ls=LS},Edges0,We,Id,Acc) ->
-    init_edge_ring([],unknown,Edges0,We,Id,[EI#r{rs=LS}|Acc]);
-init_edge_ring([unknown|Rest],EI,Edges0,We,Id,Acc) ->
-    init_edge_ring(Rest,EI,Edges0,We,Id,Acc);
-init_edge_ring([Edge|Rest],EI0,Edges0,We,Id,Acc) ->
-    case gb_sets:is_member(Edge,Edges0) of
-	true -> 
-	    {Next,EI}=replace_edge(Edge,EI0,We),
-	    init_edge_ring([Next|Rest],EI,gb_sets:delete(Edge,Edges0),We,Id,Acc);
-	false ->
-	    {_Next,EI}=replace_edge(Edge,EI0,We),
-	    init_edge_ring(Rest,EI,Edges0,We,Id,Acc)
-    end.
-
-replace_edge(Edge,#r{l=L,r=R,ls=O} = EI,We) ->
-    case opposing_edge(Edge,We,left) of
-	L -> {opposing_edge(Edge,We,right),EI#r{l=Edge,ls=gb_sets:add(L,O)}};
-	R -> {opposing_edge(Edge,We,right),EI#r{r=Edge,ls=gb_sets:add(R,O)}};
-	unknown ->
-	    case opposing_edge(Edge,We,right) of
-		L -> {unknown, EI#r{l=Edge,ls=gb_sets:add(L,O)}};
-		R -> {unknown, EI#r{r=Edge,ls=gb_sets:add(R,O)}}
-	    end;
-	Other -> 
-	    case opposing_edge(Edge,We,right) of
-		L -> {Other, EI#r{l=Edge,ls=gb_sets:add(L,O)}};
-		R -> {Other, EI#r{r=Edge,ls=gb_sets:add(R,O)}}
-	    end
-    end.
-
 opposing_edge(Edge, #we{es=Es}=We, Side) ->
     #edge{lf=Left,rf=Right} = array:get(Edge, Es),
     Face = case Side of
@@ -808,44 +577,6 @@ next_edge(Edge, Face, #we{es=Etab})->
         #edge{rf=Face,rtsu=NextEdge} -> NextEdge
     end.
 
-incr_ring_selection(Edges, We) ->
-    gb_sets:fold(fun(Edge, EdgeAcc) ->
-			 Es = incr_from_edge(Edge, We, EdgeAcc),
-			 wings_we:visible_edges(Es, We)
-		 end, gb_sets:empty(), Edges).
-
-incr_from_edge(Edge, We, Acc) ->
-    Selected = gb_sets:add(Edge, Acc),
-    LeftSet =
-	case opposing_edge(Edge, We, left) of
-	    unknown -> Selected;
-	    Left -> gb_sets:add(Left, Selected)
-	end,
-    case opposing_edge(Edge, We, right) of
-	unknown -> LeftSet;
-	Right -> gb_sets:add(Right, LeftSet)
-    end.
-
-decr_ring_selection(Edges, We) ->
-    gb_sets:fold(fun(Edge, EdgeAcc) ->
-			 decr_from_edge(Edge, We, Edges, EdgeAcc)
-		 end, Edges, Edges).
-
-decr_from_edge(Edge, We, Orig, Acc) ->
-    Left = opposing_edge(Edge, We, left),
-    Right =  opposing_edge(Edge, We, right),
-    case (Left == unknown) or (Right == unknown) of
-	true ->
-	    gb_sets:delete(Edge,Acc);
-	false ->
-	    case gb_sets:is_member(Left, Orig) and
-		gb_sets:is_member(Right, Orig) of
-		true ->
-		    Acc;
-		false ->
-		    gb_sets:delete(Edge, Acc)
-	    end
-    end.
 
 %%%
 %%% Utilities.
@@ -898,135 +629,3 @@ patch_edge(Edge, ToEdge, Face, OrigEdge, Etab) ->
 	  end,
     array:set(Edge, New, Etab).
 
-%%%% Select every nth ring
-
-select_nth_ring(N, #st{selmode=edge}=St) ->
-    wings_sel:update_sel(
-      fun(Edges, We) ->
-	      EdgeRings = nth_ring_1(Edges, {N,N}, We, Edges, gb_sets:new()),
-	      wings_we:visible_edges(EdgeRings, We)
-      end, St);
-select_nth_ring(_N, St) ->
-    St.
-
-nth_ring_1(Edges0, N, We, OrigEs, Acc) ->
-    case gb_sets:is_empty(Edges0) of
-      true -> Acc;
-      false ->
-        {Edge,Edges1} = gb_sets:take_smallest(Edges0),
-        Rings = nth_ring_2(Edge, N, We, OrigEs, gb_sets:singleton(Edge)),
-        Edges = gb_sets:subtract(Edges1, Rings),
-        nth_ring_1(Edges, N, We, OrigEs, gb_sets:union(Rings,Acc))
-    end.
-
-nth_ring_2(Edge, {N,Int}, We, OrigEs, Acc) ->
-    case opposing_edge(Edge, We, left) of
-      unknown ->
-        case opposing_edge(Edge, We, right) of
-          unknown ->
-            Acc;
-          NextEdge ->
-            {_,Edges0} = nth_ring_3(NextEdge,Edge,Edge,{N-1,Int},right,left,We,OrigEs,Acc),
-            Edges0
-        end;
-      NextEdge ->
-        {Check0,Edges0} = case gb_sets:is_member(NextEdge,OrigEs) of
-          true -> {stop,Acc};
-          false -> nth_ring_3(NextEdge,Edge,Edge,{N-1,Int},left,right,We,OrigEs,Acc)
-        end,
-        case opposing_edge(Edge, We, right) of
-          unknown ->
-            Edges0;
-          PrevEdge ->
-            {Check1,Edges1} = case gb_sets:is_member(PrevEdge,OrigEs) of
-              true -> {stop,Acc};
-              false -> nth_ring_3(PrevEdge,Edge,Edge,{N-1,Int},right,left,We,OrigEs,Acc)
-            end,
-            nth_ring_4(Check0,Edges0,Check1,Edges1,OrigEs)
-        end
-    end.
-
-nth_ring_3(CurEdge,PrevEdge,LastEdge,{0,N},Side,Oposite,We,OrigEs,Acc0) ->
-    Acc = gb_sets:insert(CurEdge,Acc0),
-    nth_ring_3(CurEdge,PrevEdge,LastEdge,{N,N},Side,Oposite,We,OrigEs,Acc);
-nth_ring_3(CurEdge,PrevEdge,LastEdge,{N0,Int},Side,Oposite,We,OrigEs,Acc) ->
-    case opposing_edge(CurEdge, We, Side) of
-      unknown -> {ok,Acc};
-      PrevEdge ->
-        case opposing_edge(CurEdge, We, Oposite) of
-          unknown -> {ok,Acc};
-          PrevEdge -> {ok,Acc};
-          LastEdge -> {ok,Acc};
-          NextEdge ->
-            case gb_sets:is_member(NextEdge,OrigEs) of
-              true ->
-                {stop,Acc};
-              false ->
-                nth_ring_3(NextEdge,CurEdge,LastEdge,{N0-1,Int},Oposite,Side,We,OrigEs,Acc)
-            end
-        end;
-      LastEdge -> {ok,Acc};
-      NextEdge ->
-        case gb_sets:is_member(NextEdge,OrigEs) of
-          true ->
-            {stop,Acc};
-          false ->
-            nth_ring_3(NextEdge,CurEdge,LastEdge,{N0-1,Int},Side,Oposite,We,OrigEs,Acc)
-        end
-    end.
-
-nth_ring_4(_,Edges,_,Edges,_) ->
-    Edges;
-nth_ring_4(Check0,Edges0,Check1,Edges1,OrigEs) ->
-    S0 = gb_sets:size(Edges0),
-    S1 = gb_sets:size(Edges1),
-    if
-      S0 =:= 1 -> Edges1;
-      S1 =:= 1 -> Edges0;
-      true -> nth_ring_5(Check0,S0,Edges0,Check1,S1,Edges1,OrigEs)
-    end.
-
-nth_ring_5(ok,_,Edges0,ok,_,Edges1,_) ->
-    gb_sets:union(Edges0,Edges1);
-nth_ring_5(stop,S0,Edges0,stop,S1,Edges1,_) ->
-    case S0 > S1 of
-      true -> Edges1;
-      false -> Edges0
-    end;
-nth_ring_5(stop,_,Edges0,_,_,Edges1,OrigEs) ->
-    case gb_sets:is_subset(Edges0,OrigEs) of
-      true -> Edges1;
-      false -> Edges0
-    end;
-nth_ring_5(_,_,Edges0,stop,_,Edges1,OrigEs) ->
-    case gb_sets:is_subset(Edges1,OrigEs) of
-      true -> Edges0;
-      false -> Edges1
-    end.
-
-%%%% Select every nth loop
-
-select_nth_loop(0, St) -> St;
-select_nth_loop(N, #st{selmode=edge}=St0) ->
-    St = wings_edge_loop:stoppable_sel_loop(St0),
-    wings_sel:update_sel(
-      fun(Edges, We) ->
-              Links = wings_edge_loop:edge_links(Edges, We),
-              SelLoop0 = nth_loop(Links, N-1, []),
-              SelLoop = gb_sets:from_list(SelLoop0),
-              wings_we:visible_edges(SelLoop, We)
-      end, St);
-select_nth_loop(_N, St) ->
-    St.
-
-nth_loop([], _, Acc) -> Acc;
-nth_loop([Es|Links], N, Acc) ->
-    nth_loop(Links, N, nth_loop_1(Es, N, Acc)).
-
-nth_loop_1([{Last,_,_}], _, Acc) -> [Last|Acc];
-nth_loop_1([{E,_,_}|Es], N, Acc) ->
-    nth_loop_1(skip_n(Es, N), N, [E|Acc]).
-
-skip_n([_]=Es, _) -> Es;
-skip_n(Edges,  0) -> Edges;
-skip_n([_|Edges], N) -> skip_n(Edges, N-1).
