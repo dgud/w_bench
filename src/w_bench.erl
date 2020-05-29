@@ -21,7 +21,9 @@ repeat(N, We, Levels, Tot, Acc) when N > 0 ->
     Time = receive {time, T} -> T end,
     repeat(N-1, We, Levels, Tot, Acc+(Time div 1000));
 repeat(0, _We, _, N, Acc) ->
-    Acc div N.
+    Time = Acc div N,
+    io:format("Time: ~wms~n",[Time]),
+    Time.
 
 run(We0, Level) when Level > 0 ->
     We = wings_subdiv:smooth(We0),
