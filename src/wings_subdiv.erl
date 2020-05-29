@@ -66,45 +66,6 @@ smooth(EntireObject, Fs, Vs, Es, Htab, #we{vp=Vp,next_id=Id}=We0) ->
 	 end,
     We.
 
-inc_smooth(#we{vp=Vp,next_id=Next}=We0, Smoothed) ->
-    case wings_va:any_update(We0, Smoothed) of
-	true ->
-	    %% Vertex attributes may have changed. Fall back to
-	    %% complete smooth.
-	    smooth(We0);
-	false ->
-	    %% Do an incremental smooth.
-	    {Faces,Htab} = smooth_faces_htab(We0),
-	    FacePos0 = face_centers(Faces, We0),
-	    FacePos = gb_trees:from_orddict([{F,Pos} ||
-						{F,{Pos,_,_}} <- FacePos0]),
-	    {RevUpdatedVs,Mid} = update_edge_vs_all(We0, FacePos, Htab, Vp, Next),
-	    VtabTail = smooth_new_vs(FacePos0, Mid, RevUpdatedVs),
-	    Vtab = smooth_move_orig(true, wings_util:array_keys(Vp),
-				    FacePos, Htab, We0, VtabTail),
-	    Smoothed#we{vp=Vtab}
-    end.
-
-get_proxy_info(DynVs, UpdateVs, #we{es=Etab,next_id=Next}=We0) ->
-    {Faces,Htab} = smooth_faces_htab(We0),
-    FacePos0  = face_centers(Faces, We0),
-    FacePos = gb_trees:from_orddict([{F,Pos} || {F,{Pos,_,_}} <- FacePos0]),
-    Elist = array:sparse_to_orddict(Etab),
-    {EdgeSplit,Mid} = get_edge_vs(Elist, UpdateVs, Htab, Next, []),
-    SmoothNew = get_new_vs(FacePos0, Mid, UpdateVs, []),
-    OrigVs = get_orig_vs(DynVs, get_orig_vs_fun(Htab), We0, []),
-    {FacePos,EdgeSplit,SmoothNew,OrigVs}.
-
-inc_smooth(#we{vp=Vtab}=We, Faces, {FacePos0,EdgeSplit,SmoothNew,OrigVs},
-	   Smoothed = #we{vp=Vp0}) ->
-    FacePos = foldl(fun(Face, FacePos) ->
-			    Pos = wings_face:vertex_positions(Face, We),
-			    gb_trees:update(Face, e3d_vec:average(Pos), FacePos)
-		    end, FacePos0, Faces),
-    Vp1 = update_edge_vs(EdgeSplit, Vtab, FacePos, Vp0),
-    Vp2 = update_new_vs(SmoothNew, FacePos, Vp1),
-    Vp3 = update_orig_vs(OrigVs, Vtab, FacePos, Vp2),
-    Smoothed#we{vp=Vp3}.
 
 smooth_faces_htab(#we{mirror=none,fs=Ftab,he=Htab,holes=[]}) ->
     Faces = gb_trees:keys(Ftab),
@@ -337,29 +298,6 @@ smooth_materials_3(Mat, NextFace, Face, Acc) ->
 %%% Moving of vertices.
 %%%
 
-soft_move_orig(EntireObject, Vs, FacePos, Htab, #we{vp=Vtab}=We, VtabTail) ->
-    MoveFun = smooth_move_orig_fun(Vtab, FacePos, Htab),
-    RevVtab =
-	case EntireObject of
-	    true ->
-		soft_move_orig_all(array:sparse_to_orddict(Vtab), MoveFun, We, []);
-	    _ ->
-		soft_move_orig_some(Vs, array:sparse_to_orddict(Vtab), MoveFun, We, [])
-	end,
-    array:from_orddict(reverse(RevVtab, VtabTail)).
-
-soft_move_orig_all([{V,Pos}|Vs], MoveFun, We, Acc) ->
-    soft_move_orig_all(Vs, MoveFun, We, [{V,Pos}|Acc]);
-soft_move_orig_all([], _FacePos, _MoveFun, Acc) -> Acc.
-
-soft_move_orig_some([V|Vs], [{V,Pos}|Vs2], MoveFun, We, Acc) ->
-    soft_move_orig_some(Vs, Vs2, MoveFun, We, [{V,Pos}|Acc]);
-soft_move_orig_some(Vs, [Pair|Vs2], MoveFun, We, Acc) ->
-    soft_move_orig_some(Vs, Vs2, MoveFun, We, [Pair|Acc]);
-soft_move_orig_some([], [], _, _, Acc) -> Acc;
-soft_move_orig_some([], Vs2, _, _, Acc) -> reverse(Vs2, Acc).
-
-
 smooth_move_orig(EntireObject, Vs, FacePos, Htab, #we{vp=Vtab}=We, VtabTail) ->
     MoveFun = smooth_move_orig_fun(Vtab, FacePos, Htab),
     RevVtab =
@@ -432,92 +370,6 @@ smooth_move_orig_fun(Vtab, FacePos, Htab) ->
 	    end
     end.
 
-get_orig_vs_fun(Htab) ->
-    case gb_sets:is_empty(Htab) of
-	true ->
-	    fun(_Edge, Face, Erec, {V,Ps,_}) ->
-		    Other = wings_vertex:other(V, Erec),
-		    {V,[Other,Face|Ps],[]}
-	    end;
-	false ->
-	    fun(Edge, Face, Erec, {V,Ps0,Hard0}) ->
-		    Other = wings_vertex:other(V, Erec),
-		    Ps = [Other,Face|Ps0],
-		    Es = case gb_sets:is_member(Edge, Htab) of
-			     true -> [Other|Hard0];
-			     false -> Hard0
-			 end,
-		    {V,Ps,Es}
-	    end
-    end.
-
-get_orig_vs([V|Vs], Fun, We, Acc) ->
-    {_, Ps,Hard} = wings_vertex:fold(Fun, {V,[],[]}, V, We),
-    case length(Hard) of
-	NumHard when NumHard < 2 ->
-	    {A,B} = case length(Ps) of
-			2*3 -> {1/9,1/3};
-			2*4 -> {1/16,2/4};
-			2*5 -> {1/25,3/5};
-			N0 ->
-			    N = N0 bsr 1,
-			    {1.0/(N*N),(N-2.0)/N}
-		    end,
-	    get_orig_vs(Vs, Fun, We, [{V,Ps,A,B}|Acc]);
-	NumHard when NumHard =:= 2 ->
-	    get_orig_vs(Vs, Fun, We, [{V,Hard}|Acc]);
-	_ThreeOrMore ->
-	    get_orig_vs(Vs, Fun, We, Acc)
-    end;
-get_orig_vs([],_, _, Acc) ->
-    Acc.
-
-update_orig_vs([{V,Ps0,A,B}|Vs], Vtab, Ftab, Vpos) ->
-    S   = array:get(V, Vtab),
-    Ps  = add_positions(Ps0, Vtab, Ftab, {0.0,0.0,0.0}),
-    Pos = e3d_vec:add_prod(e3d_vec:mul(Ps, A), S, B),
-    update_orig_vs(Vs, Vtab, Ftab, array:set(V,Pos, Vpos));
-update_orig_vs([{V,Hard0}|Vs], Vtab, Ftab, Vpos) ->
-    S    = array:get(V, Vtab),
-    Hard = [array:get(H, Vtab) || H <- Hard0],
-    Pos0 = e3d_vec:add([e3d_vec:mul(S, 6.0)|Hard]),
-    Pos  = e3d_vec:mul(Pos0, 1/8),
-    update_orig_vs(Vs, Vtab, Ftab, array:set(V,Pos, Vpos));
-update_orig_vs([], _, _, Vpos) -> Vpos.
-
-add_positions([V,F|Rest], Vtab, Ftab, Sum0) ->
-    Sum1 = e3d_vec:add(array:get(V, Vtab), Sum0),
-    Sum  = e3d_vec:add(gb_trees:get(F, Ftab), Sum1),
-    add_positions(Rest, Vtab, Ftab, Sum);
-add_positions([],_,_,Sum) -> Sum.
-
-%% Update the position for the vertex that was created in the middle
-%% of each original edge.
-
-soft_update_edge_vs_all(#we{es=Etab}, Vtab, V) ->
-    soft_update_edge_vs_all(array:sparse_to_orddict(Etab), Vtab, V, []).
-
-soft_update_edge_vs_all([{_,Rec}|Es], Vtab, V, Acc) ->
-    Pos = soft_update_edge_vs_1(Rec, Vtab),
-    soft_update_edge_vs_all(Es, Vtab, V+1, [{V,Pos}|Acc]);
-soft_update_edge_vs_all([], _, V, Acc) ->
-    {Acc,V}.
-
-soft_update_edge_vs_some(Es, #we{es=Etab}, Vtab, V) ->
-    soft_update_edge_vs_some(Es, Etab, Vtab, V, []).
-
-soft_update_edge_vs_some([E|Es], Etab, Vtab, V, Acc) ->
-    Rec = array:get(E, Etab),
-    Pos = soft_update_edge_vs_1(Rec, Vtab),
-    soft_update_edge_vs_some(Es, Etab, Vtab, V+1, [{V,Pos}|Acc]);
-soft_update_edge_vs_some([], _, _, V, Acc) ->
-    {Acc,V}.
-
-soft_update_edge_vs_1(Rec, Vtab) ->
-    #edge{vs=Va,ve=Vb} = Rec,
-    e3d_vec:average(array:get(Va, Vtab), array:get(Vb, Vtab)).
-
-
 update_edge_vs_all(#we{es=Etab}, FacePos, Hard, Vtab, V) ->
     update_edge_vs_all(array:sparse_to_orddict(Etab),
 		       FacePos, Hard, Vtab, V, []).
@@ -553,47 +405,6 @@ update_edge_vs_1(Edge, Hard, Rec, FacePos, Vtab) ->
 	    wings_util:share(Pos0)
     end.
 
-get_edge_vs([{Edge,Rec}|Es], Update, Hard, V, Acc) ->
-    case gb_sets:is_member(V, Update) of
-	true ->
-	    case gb_sets:is_member(Edge,Hard) of
-		true ->
-		    #edge{vs=Va,ve=Vb} = Rec,
-		    get_edge_vs(Es,Update,Hard,V+1,[{V,Va,Vb}|Acc]);
-		false ->
-		    #edge{vs=Va,ve=Vb,lf=Lf,rf=Rf} = Rec,
-		    get_edge_vs(Es,Update,Hard,V+1,
-				[{V,Va,Vb,Lf,Rf}|Acc])
-	    end;
-	false ->
-	    get_edge_vs(Es,Update,Hard,V+1,Acc)
-    end;
-get_edge_vs([], _, _, V, Acc) -> {Acc,V}.
-
-update_edge_vs([{V,Va,Vb}|Vs], Vtab, Ftab, Vpos) ->
-    Pos = e3d_vec:average(array:get(Va, Vtab), array:get(Vb, Vtab)),
-    update_edge_vs(Vs, Vtab, Ftab, array:set(V, Pos, Vpos));
-update_edge_vs([{V,Va,Vb,Lf,Rf}|Vs], Vtab, Ftab, Vpos) ->
-    LfPos = gb_trees:get(Lf, Ftab),
-    RfPos = gb_trees:get(Rf, Ftab),
-    Pos = e3d_vec:average(array:get(Va, Vtab),
-			  array:get(Vb, Vtab),
-			  LfPos, RfPos),
-    update_edge_vs(Vs, Vtab, Ftab, array:set(V, Pos, Vpos));
-update_edge_vs([], _, _, Vpos) -> Vpos.
-
 smooth_new_vs([{_,{Center,_,NumIds}}|Fs], V, Acc) ->
     smooth_new_vs(Fs, V+NumIds, [{V,Center}|Acc]);
 smooth_new_vs([], _, Acc) -> reverse(Acc).
-
-get_new_vs([{Face,{_,_,NumIds}}|Fs], V, Upd, Acc) ->
-    case gb_sets:is_member(V, Upd) of
-	true ->  get_new_vs(Fs, V+NumIds, Upd, [{V,Face}|Acc]);
-	false -> get_new_vs(Fs, V+NumIds, Upd, Acc)
-    end;
-get_new_vs([], _, _, Acc) -> Acc.
-
-update_new_vs([{V,Face}|Vs], Ftab, Vpos) ->
-    Pos = gb_trees:get(Face, Ftab),
-    update_new_vs(Vs, Ftab, array:set(V, Pos, Vpos));
-update_new_vs([], _, Vpos) -> Vpos.

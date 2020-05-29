@@ -553,31 +553,6 @@ collect_maybe_add(Work, Face, Edges, We, Res) ->
 	      end
       end, Work, Face, We).
 
-%%% Edge ring functions.
-
--record(r,{id,l,r,
-	   ls=gb_sets:empty(),
-	   rs=gb_sets:empty()}).
-
-opposing_edge(Edge, #we{es=Es}=We, Side) ->
-    #edge{lf=Left,rf=Right} = array:get(Edge, Es),
-    Face = case Side of
-               left -> Left;
-               right -> Right
-           end,
-    %% Get opposing edge or fail.
-    case wings_face:vertices(Face, We) of
-        4 -> next_edge(next_edge(Edge, Face, We), Face, We);
-        _ -> unknown
-    end.
-
-next_edge(Edge, Face, #we{es=Etab})->
-    case array:get(Edge, Etab) of
-        #edge{lf=Face,ltsu=NextEdge} -> NextEdge;
-        #edge{rf=Face,rtsu=NextEdge} -> NextEdge
-    end.
-
-
 %%%
 %%% Utilities.
 %%%
