@@ -439,7 +439,6 @@ calc_planes(VS0, VE0, We) ->
 %% +----*----+
 
 polygon_pairs(Face, Vs, We0) ->
-    ?ASSERT(length(Vs) > 1),
     Iter = wings_face:iterator(Face, We0),
     {Vstart,_,_,_} = wings_face:next_cw(Iter),
     case pp_make_pairs(Iter, Vs, Vstart, []) of

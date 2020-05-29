@@ -9,6 +9,7 @@ start() ->
 start(Levels) ->
     We0 = init_data(),
     We = wings_subdiv:smooth(We0),
+    _T = wings_draw_setup:smooth(#dlo{ns = {none}, src_we=We}, dummy_st),
     repeat(10, We, Levels, 10, 0).
 
 repeat(N, We, Levels, Tot, Acc) when N > 0 ->
@@ -24,6 +25,7 @@ repeat(0, _We, _, N, Acc) ->
 
 run(We0, Level) when Level > 0 ->
     We = wings_subdiv:smooth(We0),
+    _Calc = wings_draw_setup:smooth(#dlo{ns = {none}, src_we=We}, dummy_st),
     run(We, Level-1);
 run(We, 0) ->
     We.

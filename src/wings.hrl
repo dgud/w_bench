@@ -24,25 +24,7 @@
 
 -define(TC(Cmd), wings_util:tc(fun() -> Cmd end, ?MODULE, ?LINE)).
 
--ifdef(DEBUG).
--define(ASSERT(E), case E of
-		       true -> ok;
-		       _ ->
-			   error({assertion_failed,?MODULE,?LINE})
-		   end).
--define(CHECK_ERROR(), wings_gl:check_error(?MODULE, ?LINE)).
--else.
--define(ASSERT(E),ok).
--define(CHECK_ERROR(), ok).
--endif.
-
 -define(dbg(Str,Args), io:format("~p:~p: " ++ Str, [?MODULE,?LINE|Args])).
-
-%% Use for non saved global gui resources, avoids the dictionary
-%% Example: runtime fonts
--define(GET(Key), wings_wm:get_value(Key)).
--define(SET(Key,Value), wings_wm:set_value(Key, Value)).
--define(DELETE(Key), wings_wm:delete_value(Key)).
 
 %%
 %% Types.
@@ -174,20 +156,6 @@
 	 ltsu=0 :: wings_edge:edge_num(), %Left traversal successor
 	 rtpr=0 :: wings_edge:edge_num(), %Right traversal predecessor
 	 rtsu=0	:: wings_edge:edge_num()  %Right traversal successor
-	}).
-
-%% The current view/camera.
--record(view,
-	{origin,
-	 distance,				% From origo.
-	 azimuth,
-	 elevation,
-	 pan_x,					%Panning in X direction.
-	 pan_y,					%Panning in Y direction.
-	 along_axis=none,			%Which axis viewed along.
-	 fov,					%Field of view.
-	 hither,				%Near clipping plane.
-	 yon					%Far clipping plane.
 	}).
 
 %% Display lists per object.

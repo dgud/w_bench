@@ -131,7 +131,6 @@ good_normal(Face, #we{vp=Vtab}=We) ->
     good_normal(D, Vpos, Vpos).
 
 good_normal(D1, [_Va|[Vb,Vc|_]=Vs], More) ->
-    ?ASSERT(D1 == e3d_vec:sub(_Va, Vb)),
     D2 = e3d_vec:sub(Vb, Vc),
     Cross = e3d_vec:cross(D1, D2),
     case e3d_vec:len(Cross) of
